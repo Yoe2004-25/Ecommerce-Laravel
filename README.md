@@ -41,17 +41,3 @@ This project follows **Repository Pattern** (implicitly via Eloquent) and **MVC*
 - **Middleware**: Custom `AdminMiddleware` for role checks.
 - **Migrations**: Fully version-controlled database schema.
 
-## 🚀 Getting Started
-
-### Prerequisites
-- PHP >= 8.2
-- Composer
-- MySQL / PostgreSQL
-- Postman (for testing)
-
-### Installation
-
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/<your-username>/<your-repo-name>.git
-    cd <your-repo-name>
