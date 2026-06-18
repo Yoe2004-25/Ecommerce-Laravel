@@ -10,17 +10,12 @@ use Illuminate\Support\Str;
 
 class ProductController extends Controller
 {
-    public function __construct()
-    {
-        
-    }
-
     public function index(Request $request)
     {
-        // Simple cache implementation
-        $cacheKey = 'products_page_' . ($request->get('page', 1));
-        
-        $products = Cache::remember($cacheKey, 3600, function () {
+        $page = $request->get('page', 1);
+        $cacheKey = 'products_page_' . $page;
+
+        $products = Cache::tags(['products'])->remember($cacheKey, 3600, function () {
             return Product::with('category')->paginate(15);
         });
 
@@ -29,27 +24,28 @@ class ProductController extends Controller
 
     public function store(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'required|string',
             'price' => 'required|numeric|min:0',
             'stock_quantity' => 'required|integer|min:0',
             'category_id' => 'required|exists:categories,id',
-            'image_url' => 'nullable|url'
+            'image_url' => 'nullable|url|max:2048'
         ]);
+
+        $slug = $this->generateUniqueSlug($validated['name']);
 
         $product = Product::create([
-            'name' => $request->name,
-            'slug' => Str::slug($request->name),
-            'description' => $request->description,
-            'price' => $request->price,
-            'stock_quantity' => $request->stock_quantity,
-            'category_id' => $request->category_id,
-            'image_url' => $request->image_url
+            'name' => $validated['name'],
+            'slug' => $slug,
+            'description' => $validated['description'],
+            'price' => $validated['price'],
+            'stock_quantity' => $validated['stock_quantity'],
+            'category_id' => $validated['category_id'],
+            'image_url' => $validated['image_url'] ?? null
         ]);
 
-        // Clear cache
-        Cache::flush();
+        Cache::tags(['products'])->flush();
 
         return new ProductResource($product);
     }
@@ -61,24 +57,22 @@ class ProductController extends Controller
 
     public function update(Request $request, Product $product)
     {
-        $request->validate([
-            'name' => 'string|max:255',
-            'description' => 'string',
-            'price' => 'numeric|min:0',
-            'stock_quantity' => 'integer|min:0',
-            'category_id' => 'exists:categories,id'
+        $validated = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'description' => 'sometimes|string',
+            'price' => 'sometimes|numeric|min:0',
+            'stock_quantity' => 'sometimes|integer|min:0',
+            'category_id' => 'sometimes|exists:categories,id',
+            'image_url' => 'nullable|url|max:2048'
         ]);
 
-        if ($request->has('name')) {
-            $request->merge(['slug' => Str::slug($request->name)]);
+        if (isset($validated['name'])) {
+            $validated['slug'] = $this->generateUniqueSlug($validated['name'], $product->id);
         }
 
-        $product->update($request->only([
-            'name', 'slug', 'description', 'price', 
-            'stock_quantity', 'category_id', 'image_url'
-        ]));
+        $product->update($validated);
 
-        Cache::flush();
+        Cache::tags(['products'])->flush();
 
         return new ProductResource($product);
     }
@@ -86,10 +80,28 @@ class ProductController extends Controller
     public function destroy(Product $product)
     {
         $product->delete();
-        Cache::flush();
-        
+        Cache::tags(['products'])->flush();
+
         return response()->json([
             'message' => 'Product deleted successfully'
         ]);
+    }
+
+   
+    private function generateUniqueSlug(string $name, ?int $ignoreId = null): string
+    {
+        $slug = Str::slug($name);
+
+        $query = Product::where('slug', $slug);
+        if ($ignoreId) {
+            $query->where('id', '!=', $ignoreId);
+        }
+
+        if (!$query->exists()) {
+            return $slug;
+        }
+
+        $count = Product::where('slug', 'like', "{$slug}-%")->count();
+        return "{$slug}-" . ($count + 1);
     }
 }
