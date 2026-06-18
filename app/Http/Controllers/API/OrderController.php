@@ -13,17 +13,17 @@ use Illuminate\Support\Facades\Cache;
 
 class OrderController extends Controller
 {
-   
-    use AuthorizesRequests ; 
+    use AuthorizesRequests;
+
     public function index(Request $request)
     {
-        $orders = $request->user()->orders()->with('items.product')->get();
+        $orders = $request->user()->orders()->with('items.product')->paginate(15);
         return OrderResource::collection($orders);
     }
 
     public function store(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
@@ -37,14 +37,15 @@ class OrderController extends Controller
                 'user_id' => $request->user()->id,
                 'total_amount' => 0,
                 'status' => 'pending',
-                'shipping_address' => $request->shipping_address
+                'shipping_address' => $validated['shipping_address']
             ]);
 
             $total = 0;
 
-            foreach ($request->items as $item) {
-                $product = Product::findOrFail($item['product_id']);
+            foreach ($validated['items'] as $item) {
                 
+                $product = Product::lockForUpdate()->findOrFail($item['product_id']);
+
                 if ($product->stock_quantity < $item['quantity']) {
                     throw new \Exception("Insufficient stock for product: {$product->name}");
                 }
@@ -65,7 +66,6 @@ class OrderController extends Controller
 
             DB::commit();
 
-            // Clear user orders cache
             Cache::forget('user_orders_' . $request->user()->id);
 
             return new OrderResource($order->load('items.product'));
@@ -86,17 +86,25 @@ class OrderController extends Controller
 
     public function updateStatus(Request $request, Order $order)
     {
-        
-        
-        $request->validate([
+       
+        if ($request->user()->id !== $order->user_id && !$request->user()->isAdmin()) {
+            return response()->json([
+                'message' => 'Unauthorized to update this order'
+            ], 403);
+        }
+
+        $validated = $request->validate([
             'status' => 'required|in:pending,processing,completed,cancelled'
         ]);
 
-        if ($request->status === 'cancelled' && $order->status !== 'completed') {
+        if ($validated['status'] === 'cancelled' && $order->status !== 'completed') {
             DB::beginTransaction();
             try {
                 foreach ($order->items as $item) {
-                    $item->product->increaseStock($item->quantity);
+                    $product = Product::lockForUpdate()->find($item->product_id);
+                    if ($product) {
+                        $product->increaseStock($item->quantity);
+                    }
                 }
                 $order->status = 'cancelled';
                 $order->save();
@@ -106,8 +114,10 @@ class OrderController extends Controller
                 return response()->json(['message' => 'Failed to cancel order'], 400);
             }
         } else {
-            $order->update(['status' => $request->status]);
+            $order->update(['status' => $validated['status']]);
         }
+
+        Cache::forget('user_orders_' . $order->user_id);
 
         return new OrderResource($order);
     }
